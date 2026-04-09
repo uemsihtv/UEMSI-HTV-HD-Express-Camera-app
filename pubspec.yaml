@@ -1,0 +1,33 @@
+name: uemsi_htv_hd_express_app
+description: RTSP viewer for UEMSI/HTV HD Express Camera transmitters.
+publish_to: "none"
+version: 0.1.1+2
+
+environment:
+  sdk: ">=3.7.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  media_kit: ^1.2.6
+  media_kit_video: ^2.0.1
+  media_kit_libs_video: ^1.0.7
+  permission_handler: ^12.0.1
+  photo_manager: ^3.6.4
+  url_launcher: ^6.3.0
+  shared_preferences: ^2.2.3
+  android_intent_plus: ^6.0.0
+  # Official arthenica Maven artifacts were retired; this fork publishes Android + iOS binaries.
+  ffmpeg_kit_flutter_new: ^4.1.0
+  path_provider: ^2.1.5
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/images/
