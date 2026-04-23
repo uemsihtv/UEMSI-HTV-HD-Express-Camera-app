@@ -811,8 +811,7 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
         ip = null;
       }
       final ipClean = (ip ?? '').trim();
-      onTx = (ipClean.startsWith('192.168.0.') && ipClean != '192.168.0.0') ||
-          (ipClean.startsWith('192.168.1.') && ipClean != '192.168.1.0');
+      onTx = ipClean.startsWith('192.168.0.') && ipClean != '192.168.0.0';
 
       // Some devices return null/empty Wi‑Fi IP here. As a last resort, inspect
       // local network interfaces for a 192.168.0.x address.
@@ -826,8 +825,7 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
           for (final iface in ifaces) {
             for (final addr in iface.addresses) {
               final a = addr.address;
-              if ((a.startsWith('192.168.0.') && a != '192.168.0.0') ||
-                  (a.startsWith('192.168.1.') && a != '192.168.1.0')) {
+              if (a.startsWith('192.168.0.') && a != '192.168.0.0') {
                 onTx = true;
                 break;
               }
@@ -846,16 +844,8 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
     final raw = ssid.trim().toLowerCase();
     if (raw.isEmpty) return false;
 
-    // Some platforms/devices return SSIDs with different separators or formatting
-    // (e.g. `AVTOWIFI-xxxx`, `AVTOWIFI xxxx`, quotes, etc.). Normalize to a strict
-    // alphanumeric prefix check for robust matching.
-    final alnumOnly = raw.replaceAll(RegExp(r'[^a-z0-9]'), '');
-
     if (raw == _txSsidExactHostAp5g) return true;
     if (raw.startsWith(_txSsidPrefixUemsi)) return true;
-
-    // Accept AVTOWIFI with any separator: `AVTOWIFI_`, `AVTOWIFI-`, etc.
-    if (alnumOnly.startsWith('avtowifi')) return true;
     return false;
   }
 
