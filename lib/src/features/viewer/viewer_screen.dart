@@ -7,10 +7,12 @@ import 'package:flutter/material.dart';
 import 'package:android_intent_plus/android_intent.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
+import 'package:network_info_plus/network_info_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../config/legal_urls.dart';
 import '../../services/gallery_saver.dart';
 import '../../services/ffmpeg_recorder.dart';
 import '../../services/system_gallery.dart';
@@ -27,6 +29,9 @@ class ViewerScreen extends StatefulWidget {
 class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver {
   static const _rtspHostPath = 'rtsp://192.168.0.1:554/main';
   static const _landingAsset = 'assets/images/hd_express_background.png';
+  static const _txSsidPrefixUemsi = 'uemsi/htv hd express camera';
+  static const _txSsidPrefixAvto = 'avtowifi_';
+  static const _txSsidExactHostAp5g = 'host_ap_5g';
 
   /// Default [PlayerConfiguration.protocolWhitelist] omits `rtsp`; FFmpeg then cannot open RTSP.
   static const _protocolWhitelist = <String>[
@@ -51,6 +56,8 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
   Timer? _retryTimer;
   int _retryCount = 0;
   bool _healthTickInFlight = false;
+  bool _resumeReachabilityBurstInFlight = false;
+  Future<bool>? _probeRtspHostInFlight;
 
   final List<StreamSubscription<dynamic>> _playerSubs = [];
   bool _inForeground = true;
@@ -68,10 +75,14 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
   int _playerGeneration = 0;
 
   bool _reachable = false;
+  bool _onTransmitterWifi = false;
   String _status = 'Idle';
   bool _showLiveVideo = false;
 
   static const _neonGreen = Color(0xFF39FF14);
+
+  /// Set to `false` to restore the neon [CircularProgressIndicator] loaders.
+  static const bool _usePooLoadingSpinner = true;
   static const _neonFg = Colors.black;
 
   String _formatElapsed(Duration d) {
@@ -81,14 +92,17 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
     return '$m:$s';
   }
 
-  Widget _neonLoadingSpinner({double size = 44}) {
-    return SizedBox.square(
-      dimension: size,
-      child: const CircularProgressIndicator(
-        strokeWidth: 3,
-        color: _neonGreen,
-      ),
-    );
+  Widget _neonLoadingSpinner({double size = 64}) {
+    if (!_usePooLoadingSpinner) {
+      return SizedBox.square(
+        dimension: size,
+        child: const CircularProgressIndicator(
+          strokeWidth: 3,
+          color: _neonGreen,
+        ),
+      );
+    }
+    return _SpinningPooSpinner(size: size);
   }
 
   Future<void> _openAboutDialog() async {
@@ -123,11 +137,59 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
                   ),
                   const SizedBox(height: 12),
                   Text(
-                    'This app uses open-source software. Click below to view third-party notices and licences.',
+                    'Privacy, terms, and other legal policies open in your browser when linked below. This app uses open-source software — open third-party notices and licences when needed.',
                     textAlign: TextAlign.center,
                     style: Theme.of(ctx).textTheme.bodyMedium,
                   ),
                   const SizedBox(height: 12),
+                  FilledButton(
+                    onPressed: () => _launchLegalUrl(LegalUrls.privacyPolicyUrl),
+                    style: neonButtonStyle,
+                    child: const Text('Privacy policy'),
+                  ),
+                  if (LegalUrls.dataSubjectRequestUrl != null) ...[
+                    const SizedBox(height: 10),
+                    FilledButton(
+                      onPressed: () => _launchLegalUrl(
+                        LegalUrls.dataSubjectRequestUrl!,
+                      ),
+                      style: neonButtonStyle,
+                      child: const Text('Privacy rights & data requests'),
+                    ),
+                  ],
+                  const SizedBox(height: 10),
+                  FilledButton(
+                    onPressed: () => _launchLegalUrl(LegalUrls.termsOfUseUrl),
+                    style: neonButtonStyle,
+                    child: const Text('Terms of use'),
+                  ),
+                  if (LegalUrls.cookiePolicyUrl != null) ...[
+                    const SizedBox(height: 10),
+                    FilledButton(
+                      onPressed: () =>
+                          _launchLegalUrl(LegalUrls.cookiePolicyUrl!),
+                      style: neonButtonStyle,
+                      child: const Text('Cookie policy'),
+                    ),
+                  ],
+                  if (LegalUrls.eulaUrl != null) ...[
+                    const SizedBox(height: 10),
+                    FilledButton(
+                      onPressed: () => _launchLegalUrl(LegalUrls.eulaUrl!),
+                      style: neonButtonStyle,
+                      child: const Text('EULA'),
+                    ),
+                  ],
+                  if (LegalUrls.disclaimerUrl != null) ...[
+                    const SizedBox(height: 10),
+                    FilledButton(
+                      onPressed: () =>
+                          _launchLegalUrl(LegalUrls.disclaimerUrl!),
+                      style: neonButtonStyle,
+                      child: const Text('Disclaimer'),
+                    ),
+                  ],
+                  const SizedBox(height: 10),
                   FilledButton(
                     onPressed: () async {
                       Navigator.of(ctx).pop();
@@ -160,12 +222,9 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
                   ),
                   const SizedBox(height: 10),
                   FilledButton(
-                    onPressed: () async {
-                      final uri = Uri.parse(
-                        'https://github.com/uemsihtv/UEMSI-HTV-HD-Express-Camera-app',
-                      );
-                      await launchUrl(uri, mode: LaunchMode.externalApplication);
-                    },
+                    onPressed: () => _launchLegalUrl(
+                      LegalUrls.sourceCodeRepositoryUrl,
+                    ),
                     style: neonButtonStyle,
                     child: const Text('Source code'),
                   ),
@@ -183,6 +242,10 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
         );
       },
     );
+  }
+
+  Future<void> _launchLegalUrl(String url) async {
+    await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
   }
 
   ButtonStyle _neonFilledStyle() {
@@ -312,12 +375,37 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
       case AppLifecycleState.resumed:
         _inForeground = true;
         _startHealthLoop();
+        // Coming back from Wi‑Fi settings, reachability may take a moment to flip:
+        // DHCP + routing + RTSP port can lag behind the moment the app resumes.
+        // Probe in a short burst so the setup card disappears promptly.
+        _probeReachabilityAfterResume();
         if (_reachable && _prefs != null && _showLiveVideo && _player == null && !_playerStarting) {
           _startPlayer();
         }
       case AppLifecycleState.inactive:
         break;
     }
+  }
+
+  void _probeReachabilityAfterResume() {
+    if (_resumeReachabilityBurstInFlight) return;
+    _resumeReachabilityBurstInFlight = true;
+    unawaited(() async {
+      try {
+        await _refreshReachabilityAndStartIfNeeded();
+        if (!mounted || !_inForeground || _reachable) return;
+        // On Android, Wi‑Fi association may be reported before DHCP/routing is
+        // usable. Probe for a bit longer (up to ~10s) so the setup card drops.
+        final deadline = DateTime.now().add(const Duration(seconds: 10));
+        while (mounted && _inForeground && !_reachable && DateTime.now().isBefore(deadline)) {
+          await Future<void>.delayed(const Duration(milliseconds: 850));
+          if (!mounted || !_inForeground) return;
+          await _refreshReachabilityAndStartIfNeeded();
+        }
+      } finally {
+        _resumeReachabilityBurstInFlight = false;
+      }
+    }());
   }
 
   Future<void> _precacheLandingArt() async {
@@ -687,10 +775,37 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
     if (_healthTickInFlight) return;
     _healthTickInFlight = true;
     try {
+      await _refreshWifiAssociation();
       await _refreshReachabilityAndStartIfNeeded();
     } finally {
       _healthTickInFlight = false;
     }
+  }
+
+  Future<void> _refreshWifiAssociation() async {
+    // Best-effort: on iOS this requires the "Access WiFi Information" entitlement,
+    // otherwise this returns null. When unavailable, we fall back to `_reachable`.
+    String? ssid;
+    try {
+      ssid = await NetworkInfo().getWifiName();
+    } catch (_) {
+      ssid = null;
+    }
+    if (!mounted || ssid == null || ssid.isEmpty) return;
+    final cleaned = ssid.replaceAll('"', '').trim();
+    final onTx = _isTransmitterSsid(cleaned);
+    if (onTx != _onTransmitterWifi) {
+      setState(() => _onTransmitterWifi = onTx);
+    }
+  }
+
+  bool _isTransmitterSsid(String ssid) {
+    final s = ssid.trim().toLowerCase();
+    if (s.isEmpty) return false;
+    if (s == _txSsidExactHostAp5g) return true;
+    if (s.startsWith(_txSsidPrefixAvto)) return true;
+    if (s.startsWith(_txSsidPrefixUemsi)) return true;
+    return false;
   }
 
   /// Single place that probes the transmitter and starts playback when appropriate.
@@ -716,19 +831,27 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
   }
 
   Future<bool> _probeRtspHost() async {
-    try {
-      final socket = await Socket.connect(
-        '192.168.0.1',
-        554,
-        // Local AP RTSP port; keep this tight so we don’t wait seconds before
-        // each retry when the user is not on the transmitter Wi‑Fi.
-        timeout: const Duration(milliseconds: 1200),
-      );
-      socket.destroy();
-      return true;
-    } catch (_) {
-      return false;
-    }
+    final existing = _probeRtspHostInFlight;
+    if (existing != null) return existing;
+    final f = () async {
+      try {
+        final socket = await Socket.connect(
+          '192.168.0.1',
+          554,
+          // Local AP RTSP port; keep this tight so we don’t wait seconds before
+          // each retry when the user is not on the transmitter Wi‑Fi.
+          timeout: const Duration(milliseconds: 1200),
+        );
+        socket.destroy();
+        return true;
+      } catch (_) {
+        return false;
+      } finally {
+        _probeRtspHostInFlight = null;
+      }
+    }();
+    _probeRtspHostInFlight = f;
+    return f;
   }
 
   void _startPlayer() {
@@ -749,18 +872,42 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
         await _cancelPlayerSubsAsync();
         _ignorePlaybackErrorsUntil =
             DateTime.now().add(const Duration(seconds: 3));
-        try {
-          await previous.stop();
-        } catch (_) {}
-        // Keep previous player/controller in state until the new pipeline is ready
-        // so we never flash the full-screen "Loading Video…" during reconnect.
+        // Do not stop/dispose `previous` until the new player is in state and the
+        // Video widget is bound to the new controller. Stopping here leaves the old
+        // surface on-screen but blank (e.g. low-latency toggle / settings restart).
       }
-      if (!mounted || _prefs == null) return;
-      if (gen != _playerGeneration) return;
+      if (!mounted) return;
+      if (_prefs == null) {
+        if (mounted && previous != null) {
+          _bindPlayerStreams(previous);
+          _syncPlayerStatus();
+        }
+        return;
+      }
+      if (gen != _playerGeneration) {
+        if (mounted && previous != null) {
+          _bindPlayerStreams(previous);
+          _syncPlayerStatus();
+        }
+        return;
+      }
 
       await Future<void>.delayed(const Duration(milliseconds: 200));
-      if (!mounted || _prefs == null) return;
-      if (gen != _playerGeneration) return;
+      if (!mounted) return;
+      if (_prefs == null) {
+        if (mounted && previous != null) {
+          _bindPlayerStreams(previous);
+          _syncPlayerStatus();
+        }
+        return;
+      }
+      if (gen != _playerGeneration) {
+        if (mounted && previous != null) {
+          _bindPlayerStreams(previous);
+          _syncPlayerStatus();
+        }
+        return;
+      }
 
       final uri = _rtspUriLowLatency();
 
@@ -770,14 +917,20 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
 
       if (!mounted) {
         await _disposePlayer(player);
-        if (previous != null) await _disposePlayer(previous);
         return;
       }
 
       await WidgetsBinding.instance.endOfFrame;
-      if (!mounted || gen != _playerGeneration) {
+      if (!mounted) {
         await _disposePlayer(player);
-        if (previous != null) await _disposePlayer(previous);
+        return;
+      }
+      if (gen != _playerGeneration) {
+        await _disposePlayer(player);
+        if (previous != null) {
+          _bindPlayerStreams(previous);
+          _syncPlayerStatus();
+        }
         return;
       }
       try {
@@ -794,17 +947,20 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
             _videoController = null;
           });
         }
+        if (mounted) _syncPlayerStatus();
         return;
       }
 
       if (!mounted) {
         await _disposePlayer(player);
-        if (previous != null) await _disposePlayer(previous);
         return;
       }
       if (gen != _playerGeneration) {
         await _disposePlayer(player);
-        if (previous != null) await _disposePlayer(previous);
+        if (previous != null) {
+          _bindPlayerStreams(previous);
+          _syncPlayerStatus();
+        }
         return;
       }
 
@@ -814,12 +970,14 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
 
       if (!mounted) {
         await _disposePlayer(player);
-        if (previous != null) await _disposePlayer(previous);
         return;
       }
       if (gen != _playerGeneration) {
         await _disposePlayer(player);
-        if (previous != null) await _disposePlayer(previous);
+        if (previous != null) {
+          _bindPlayerStreams(previous);
+          _syncPlayerStatus();
+        }
         return;
       }
 
@@ -976,13 +1134,12 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
     }
 
     if (!_showLiveVideo) {
-      final prefs = _prefs!;
-      final showWifiPopup = !prefs.wifiSetupPopupDismissed;
+      // Show the Wi‑Fi setup card until we're actually reachable on the transmitter network.
+      // This avoids one-time dismissal causing confusion on subsequent launches.
+      final showWifiPopup = !(_onTransmitterWifi || _reachable);
 
       Future<void> openWifiFromPopup() async {
-        await prefs.setWifiSetupPopupDismissed(true);
         if (!mounted) return;
-        setState(() {});
         if (Platform.isAndroid) {
           await const AndroidIntent(action: 'android.settings.WIFI_SETTINGS').launch();
         } else {
@@ -1107,7 +1264,7 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
                           child: Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              _neonLoadingSpinner(size: 72),
+                              _neonLoadingSpinner(size: 88),
                               const SizedBox(height: 14),
                               DecoratedBox(
                                 decoration: BoxDecoration(
@@ -1267,6 +1424,84 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
               ),
             ),
         ],
+      ),
+    );
+  }
+}
+
+/// Spinning 💩 loader for [ViewerScreen] (see `_usePooLoadingSpinner` in state class).
+class _SpinningPooSpinner extends StatefulWidget {
+  const _SpinningPooSpinner({required this.size});
+
+  final double size;
+
+  @override
+  State<_SpinningPooSpinner> createState() => _SpinningPooSpinnerState();
+}
+
+class _SpinningPooSpinnerState extends State<_SpinningPooSpinner>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _rotation = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1800),
+  )..repeat();
+
+  @override
+  void dispose() {
+    _rotation.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final emojiSize = widget.size * 0.72;
+    // Android: (1) Decoder/Surface often shows solid green before the first frame;
+    // if our loader has no opaque backing, that reads as a "green spinner". (2) Roboto
+    // emoji glyphs are often dark monochrome — tint so they stay visible on dark UI.
+    final TextStyle emojiStyle = TextStyle(
+      fontSize: emojiSize,
+      height: 1.15,
+      // Prefer color emoji on Android; gold tint helps if we fall back to Roboto mono.
+      color: Platform.isAndroid ? const Color(0xFFE8C547) : null,
+      fontFamily: Platform.isAndroid ? 'Noto Color Emoji' : null,
+      shadows: const [
+        Shadow(
+          color: Color(0xA6000000),
+          blurRadius: 8,
+          offset: Offset(0, 2),
+        ),
+        Shadow(
+          color: Color(0x55FFFFFF),
+          blurRadius: 4,
+          offset: Offset.zero,
+        ),
+      ],
+    );
+    final pad = widget.size * 0.12;
+    return SizedBox.square(
+      dimension: widget.size,
+      child: Center(
+        child: Container(
+          padding: EdgeInsets.all(pad),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.82),
+            shape: BoxShape.circle,
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.45),
+                blurRadius: widget.size * 0.15,
+              ),
+            ],
+          ),
+          child: RotationTransition(
+            turns: _rotation,
+            child: Text(
+              '\u{1F4A9}',
+              textAlign: TextAlign.center,
+              style: emojiStyle,
+            ),
+          ),
+        ),
       ),
     );
   }

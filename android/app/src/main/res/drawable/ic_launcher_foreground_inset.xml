@@ -2,7 +2,7 @@
 <!-- Adaptive icons mask the outer ~18dp; keep branding inside the 66dp safe circle. -->
 <inset xmlns:android="http://schemas.android.com/apk/res/android"
     android:drawable="@mipmap/ic_launcher_foreground"
-    android:insetLeft="21dp"
-    android:insetTop="21dp"
-    android:insetRight="21dp"
-    android:insetBottom="21dp" />
+    android:insetLeft="10dp"
+    android:insetTop="10dp"
+    android:insetRight="10dp"
+    android:insetBottom="10dp" />

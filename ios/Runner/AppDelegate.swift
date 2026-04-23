@@ -19,6 +19,7 @@ import UIKit
 
     // iOS 26 workaround: avoid UIScene + implicit engine races by using classic
     // AppDelegate window setup with an explicit FlutterEngine.
+    // Scene-based alternative (not built): see SceneDelegate.swift header comments.
     let engine = FlutterEngine(name: "main_engine")
     engine.run()
     GeneratedPluginRegistrant.register(with: engine)

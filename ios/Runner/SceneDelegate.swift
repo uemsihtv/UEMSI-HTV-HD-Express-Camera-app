@@ -1,3 +1,16 @@
+// MARK: - Reference only (not compiled in the Runner target)
+//
+// The app uses the AppDelegate `UIWindow` + explicit `FlutterEngine` path (see
+// AppDelegate.swift) and has no `UIApplicationSceneManifest` in Info.plist, so
+// this file is never loaded at runtime.
+//
+// When Flutter + UIScene are stable for this project (see AppDelegate comments
+// re: iOS 26 / engine lifecycle), you can switch to scenes by:
+// 1. Add `UIApplicationSceneManifest` to Info.plist (scene config + delegate class).
+// 2. In Xcode: Runner target → Build Phases → Compile Sources → add SceneDelegate.swift.
+// 3. Reconcile startup with AppDelegate (single engine / avoid duplicate channels);
+//    follow current Flutter iOS embedding docs for scene-based apps.
+//
 import Flutter
 import NetworkExtension
 import UIKit
