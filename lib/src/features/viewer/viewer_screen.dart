@@ -30,7 +30,6 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
   static const _rtspHostPath = 'rtsp://192.168.0.1:554/main';
   static const _landingAsset = 'assets/images/hd_express_background.png';
   static const _txSsidPrefixUemsi = 'uemsi/htv hd express camera';
-  static const _txSsidPrefixAvto = 'avtowifi_';
   static const _txSsidExactHostAp5g = 'host_ap_5g';
 
   /// Default [PlayerConfiguration.protocolWhitelist] omits `rtsp`; FFmpeg then cannot open RTSP.
@@ -791,20 +790,72 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
     } catch (_) {
       ssid = null;
     }
-    if (!mounted || ssid == null || ssid.isEmpty) return;
-    final cleaned = ssid.replaceAll('"', '').trim();
-    final onTx = _isTransmitterSsid(cleaned);
+    if (!mounted) return;
+
+    final cleaned = (ssid ?? '').replaceAll('"', '').trim();
+    final ssidLooksMissing = cleaned.isEmpty ||
+        cleaned.toLowerCase() == '<unknown ssid>' ||
+        cleaned.toLowerCase() == 'unknown ssid';
+
+    bool onTx = false;
+    if (!ssidLooksMissing) {
+      onTx = _isTransmitterSsid(cleaned);
+    } else {
+      // SSID can be unavailable on some devices / OS versions even when Wi‑Fi is
+      // connected (privacy/permissions). Fall back to local IP: transmitter uses
+      // 192.168.0.1, so a DHCP lease in 192.168.0.x implies we're on that network.
+      String? ip;
+      try {
+        ip = await NetworkInfo().getWifiIP();
+      } catch (_) {
+        ip = null;
+      }
+      final ipClean = (ip ?? '').trim();
+      onTx = (ipClean.startsWith('192.168.0.') && ipClean != '192.168.0.0') ||
+          (ipClean.startsWith('192.168.1.') && ipClean != '192.168.1.0');
+
+      // Some devices return null/empty Wi‑Fi IP here. As a last resort, inspect
+      // local network interfaces for a 192.168.0.x address.
+      if (!onTx) {
+        try {
+          final ifaces = await NetworkInterface.list(
+            type: InternetAddressType.IPv4,
+            includeLoopback: false,
+            includeLinkLocal: false,
+          );
+          for (final iface in ifaces) {
+            for (final addr in iface.addresses) {
+              final a = addr.address;
+              if ((a.startsWith('192.168.0.') && a != '192.168.0.0') ||
+                  (a.startsWith('192.168.1.') && a != '192.168.1.0')) {
+                onTx = true;
+                break;
+              }
+            }
+            if (onTx) break;
+          }
+        } catch (_) {}
+      }
+    }
     if (onTx != _onTransmitterWifi) {
       setState(() => _onTransmitterWifi = onTx);
     }
   }
 
   bool _isTransmitterSsid(String ssid) {
-    final s = ssid.trim().toLowerCase();
-    if (s.isEmpty) return false;
-    if (s == _txSsidExactHostAp5g) return true;
-    if (s.startsWith(_txSsidPrefixAvto)) return true;
-    if (s.startsWith(_txSsidPrefixUemsi)) return true;
+    final raw = ssid.trim().toLowerCase();
+    if (raw.isEmpty) return false;
+
+    // Some platforms/devices return SSIDs with different separators or formatting
+    // (e.g. `AVTOWIFI-xxxx`, `AVTOWIFI xxxx`, quotes, etc.). Normalize to a strict
+    // alphanumeric prefix check for robust matching.
+    final alnumOnly = raw.replaceAll(RegExp(r'[^a-z0-9]'), '');
+
+    if (raw == _txSsidExactHostAp5g) return true;
+    if (raw.startsWith(_txSsidPrefixUemsi)) return true;
+
+    // Accept AVTOWIFI with any separator: `AVTOWIFI_`, `AVTOWIFI-`, etc.
+    if (alnumOnly.startsWith('avtowifi')) return true;
     return false;
   }
 
