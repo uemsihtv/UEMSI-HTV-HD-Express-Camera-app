@@ -119,6 +119,8 @@ flutter build ios --release --no-codesign
 
 **Note:** iOS **14+** is required (see `ios/Podfile`). Some simulator configurations may be limited by native dependencies (e.g. FFmpegKit); test on a **physical device** when in doubt.
 
+**UIScene:** the app currently uses the classic AppDelegate window path on purpose. A future migration checklist is in [`docs/UISCENE_MIGRATION.md`](docs/UISCENE_MIGRATION.md) (reference: `ios/Runner/SceneDelegate.swift`).
+
 ## Features (summary)
 
 - Landing screen, Wi‑Fi setup flow, live RTSP video (media_kit)
