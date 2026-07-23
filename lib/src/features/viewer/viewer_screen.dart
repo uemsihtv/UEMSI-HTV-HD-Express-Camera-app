@@ -4,6 +4,7 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:android_intent_plus/android_intent.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
@@ -13,10 +14,12 @@ import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../config/legal_urls.dart';
+import '../../services/firmware_frame_crop.dart';
 import '../../services/gallery_saver.dart';
 import '../../services/ffmpeg_recorder.dart';
 import '../../services/system_gallery.dart';
 import '../../widgets/landing_background.dart';
+import 'device_settings_screen.dart';
 import 'viewer_prefs.dart';
 
 class ViewerScreen extends StatefulWidget {
@@ -29,7 +32,7 @@ class ViewerScreen extends StatefulWidget {
 class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver {
   static const _rtspHostPath = 'rtsp://192.168.0.1:554/main';
   static const _landingAsset = 'assets/images/hd_express_background.png';
-  static const _txSsidPrefixUemsi = 'uemsi/htv hd express camera';
+  static const _txSsidPrefixUemsi = 'uemsi/htv hdcamera';
   static const _txSsidExactHostAp5g = 'host_ap_5g';
 
   /// Default [PlayerConfiguration.protocolWhitelist] omits `rtsp`; FFmpeg then cannot open RTSP.
@@ -121,6 +124,8 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
         );
 
         return AlertDialog(
+          backgroundColor: Colors.black,
+          surfaceTintColor: Colors.transparent,
           title: null,
           content: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 560),
@@ -132,13 +137,17 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
                   Text(
                     'UEMSI/HTV HD Express Camera app',
                     textAlign: TextAlign.center,
-                    style: Theme.of(ctx).textTheme.titleLarge,
+                    style: Theme.of(ctx).textTheme.titleLarge?.copyWith(
+                          color: Colors.white,
+                        ),
                   ),
                   const SizedBox(height: 12),
                   Text(
                     'Privacy, terms, and other legal policies open in your browser when linked below. This app uses open-source software — open third-party notices and licences when needed.',
                     textAlign: TextAlign.center,
-                    style: Theme.of(ctx).textTheme.bodyMedium,
+                    style: Theme.of(ctx).textTheme.bodyMedium?.copyWith(
+                          color: Colors.white70,
+                        ),
                   ),
                   const SizedBox(height: 12),
                   FilledButton(
@@ -800,10 +809,10 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
     bool onTx = false;
     if (!ssidLooksMissing) {
       onTx = _isTransmitterSsid(cleaned);
-    } else {
-      // SSID can be unavailable on some devices / OS versions even when Wi‑Fi is
-      // connected (privacy/permissions). Fall back to local IP: transmitter uses
-      // 192.168.0.1, so a DHCP lease in 192.168.0.x implies we're on that network.
+    }
+    // Also use LAN IP when SSID is hidden *or* reported in an unexpected form.
+    // Transmitter AP is 192.168.0.1 — a 192.168.0.x lease means we're on that network.
+    if (!onTx) {
       String? ip;
       try {
         ip = await NetworkInfo().getWifiIP();
@@ -813,8 +822,6 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
       final ipClean = (ip ?? '').trim();
       onTx = ipClean.startsWith('192.168.0.') && ipClean != '192.168.0.0';
 
-      // Some devices return null/empty Wi‑Fi IP here. As a last resort, inspect
-      // local network interfaces for a 192.168.0.x address.
       if (!onTx) {
         try {
           final ifaces = await NetworkInterface.list(
@@ -844,7 +851,15 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
     final raw = ssid.trim().toLowerCase();
     if (raw.isEmpty) return false;
 
-    if (raw == _txSsidExactHostAp5g) return true;
+    // Lab / legacy AP — supported for live video, not listed in the Wi‑Fi setup card.
+    final alnum = raw.replaceAll(RegExp(r'[^a-z0-9]'), '');
+    if (raw == _txSsidExactHostAp5g ||
+        raw.startsWith('host_ap') ||
+        alnum == 'hostap5g') {
+      return true;
+    }
+
+    // Production: UEMSI/HTV HDCamera 2.4G_… / 5G_…
     if (raw.startsWith(_txSsidPrefixUemsi)) return true;
     return false;
   }
@@ -1113,6 +1128,142 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
     }
   }
 
+  Future<void> _openDeviceSettings() async {
+    if (!mounted) return;
+    // iOS: in-app WKWebView stays blank for the transmitter's HTTP UI.
+    // Manufacturer path is Safari. Pre-seed shared Keychain credentials so
+    // iPhone auto-fills Basic Auth like iPad (URL user:pass is often stripped).
+    if (Platform.isIOS) {
+      try {
+        await const MethodChannel('uemsi_device_web')
+            .invokeMethod<bool>('preauthDeviceWebUi')
+            .timeout(const Duration(seconds: 6));
+      } catch (_) {
+        // Still open Safari; user can sign in manually if needed.
+      }
+      if (!mounted) return;
+
+      final uri = Uri.parse('http://192.168.0.1/');
+      final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!mounted) return;
+      if (!ok) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Could not open device settings in Safari'),
+          ),
+        );
+      }
+      return;
+    }
+
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => const DeviceSettingsScreen(),
+      ),
+    );
+  }
+
+  static const _resetMeterUri =
+      'http://192.168.0.1/api/httpset?action=resetCount&val=0';
+
+  bool _resettingMeter = false;
+
+  Future<void> _resetMeterCounter() async {
+    if (_resettingMeter) return;
+    _resettingMeter = true;
+    setState(() {});
+    try {
+      final client = HttpClient();
+      try {
+        client.connectionTimeout = const Duration(seconds: 3);
+        final request = await client
+            .getUrl(Uri.parse(_resetMeterUri))
+            .timeout(const Duration(seconds: 4));
+        final response =
+            await request.close().timeout(const Duration(seconds: 4));
+        await response.drain<void>();
+        if (!mounted) return;
+        final ok = response.statusCode >= 200 && response.statusCode < 300;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              ok
+                  ? 'Meter counter reset to 0'
+                  : 'Reset failed (${response.statusCode})',
+            ),
+          ),
+        );
+      } finally {
+        client.close(force: true);
+      }
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Could not reset meter counter. Stay on transmitter Wi‑Fi.',
+          ),
+        ),
+      );
+    } finally {
+      _resettingMeter = false;
+      if (mounted) setState(() {});
+    }
+  }
+
+  Widget _neonMeterResetButton() {
+    const asset = 'assets/images/meter_reset_icon.png';
+    return Tooltip(
+      message: 'Reset meter counter to 0',
+      child: Material(
+        color: Colors.black.withValues(alpha: 0.45),
+        shape: const CircleBorder(),
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: _resettingMeter
+              ? null
+              : () => unawaited(_resetMeterCounter()),
+          child: SizedBox(
+            width: 44,
+            height: 44,
+            child: Center(
+              child: _resettingMeter
+                  ? const SizedBox(
+                      width: 22,
+                      height: 22,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: _neonGreen,
+                      ),
+                    )
+                  : Image.asset(
+                      asset,
+                      width: 34,
+                      height: 34,
+                      fit: BoxFit.contain,
+                    ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _neonGearButton({
+    required VoidCallback onPressed,
+    required String label,
+    String? tooltip,
+  }) {
+    final button = FilledButton.icon(
+      onPressed: onPressed,
+      style: _neonFilledCompactStyle(),
+      icon: const Icon(Icons.settings),
+      label: Text(label),
+    );
+    if (tooltip == null || tooltip.isEmpty) return button;
+    return Tooltip(message: tooltip, child: button);
+  }
+
   Future<void> _toggleLowLatencyTuningTcp(bool enabled) async {
     final prefs = _prefs;
     if (prefs == null) return;
@@ -1152,8 +1303,15 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
       return;
     }
 
+    var outBytes = bytes;
+    try {
+      outBytes = await cropImageBytesBottom(bytes: bytes);
+    } catch (_) {
+      // Fall back to the uncropped frame if crop fails.
+    }
+
     final ts = DateTime.now().toIso8601String().replaceAll(':', '-');
-    await GallerySaver.saveImageBytes(bytes: bytes, title: 'UEMSI_$ts.jpg');
+    await GallerySaver.saveImageBytes(bytes: outBytes, title: 'UEMSI_$ts.png');
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Saved to Photos')),
@@ -1260,24 +1418,43 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
                 alignment: Alignment.topRight,
                 child: Padding(
                   padding: const EdgeInsets.all(12),
-                  child: FilledButton(
-                    onPressed: _openAboutDialog,
-                    style: FilledButton.styleFrom(
-                      backgroundColor: _neonGreen,
-                      foregroundColor: Colors.black,
-                      padding: const EdgeInsets.symmetric(
-                        vertical: 8,
-                        horizontal: 12,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _neonGearButton(
+                            onPressed: () => unawaited(_openDeviceSettings()),
+                            label: 'Footage',
+                            tooltip: 'Device Settings',
+                          ),
+                          const SizedBox(height: 8),
+                          _neonMeterResetButton(),
+                        ],
                       ),
-                      minimumSize: const Size(0, 34),
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      textStyle: const TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 0.2,
+                      const SizedBox(width: 8),
+                      FilledButton(
+                        onPressed: _openAboutDialog,
+                        style: FilledButton.styleFrom(
+                          backgroundColor: _neonGreen,
+                          foregroundColor: Colors.black,
+                          padding: const EdgeInsets.symmetric(
+                            vertical: 8,
+                            horizontal: 12,
+                          ),
+                          minimumSize: const Size(0, 34),
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          textStyle: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.2,
+                          ),
+                        ),
+                        child: const Text('About'),
                       ),
-                    ),
-                    child: const Text('About'),
+                    ],
                   ),
                 ),
               ),
@@ -1352,11 +1529,9 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
                     child: Stack(
                       fit: StackFit.expand,
                       children: [
-                        Video(
-                          controller: vc,
-                          fit: BoxFit.contain,
-                          controls: NoVideoControls,
-                        ),
+                        // Contain full FOV; clip bottom of the actual frame only
+                        // (same keep fraction as photos). Never BoxFit.cover / mpv vf.
+                        _buildCroppedLiveVideo(vc),
                         ListenableBuilder(
                           listenable: vc.notifier,
                           builder: (context, _) {
@@ -1392,6 +1567,21 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
                             color: _neonGreen,
                             tooltip: 'Back',
                           ),
+                        ),
+                      ),
+                      Align(
+                        alignment: Alignment.topRight,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            _neonGearButton(
+                              onPressed: () => unawaited(_openDeviceSettings()),
+                              label: 'Footage',
+                              tooltip: 'Device Settings',
+                            ),
+                            const SizedBox(height: 8),
+                            _neonMeterResetButton(),
+                          ],
                         ),
                       ),
                       if (_isRecording)
@@ -1430,15 +1620,10 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
                       ),
                       Align(
                         alignment: Alignment.bottomCenter,
-                        child: Material(
-                          color: Colors.black.withValues(alpha: 0.35),
-                          shape: const CircleBorder(),
-                          child: IconButton(
-                            onPressed: _openSettingsSheet,
-                            icon: const Icon(Icons.settings),
-                            color: Colors.white,
-                            tooltip: 'Settings',
-                          ),
+                        child: _neonGearButton(
+                          onPressed: _openSettingsSheet,
+                          label: 'Video',
+                          tooltip: 'Video settings',
                         ),
                       ),
                       Align(
@@ -1458,13 +1643,28 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
                           label: Text(_isRecording ? 'Stop' : 'Record'),
                         ),
                       ),
-                      // (Intentionally no extra settings UI here; only buttons + gear.)
                     ],
                   ),
                 ),
               ),
             ),
         ],
+      ),
+    );
+  }
+
+  /// Stable live Video widget — do not recreate/resize it from width/height
+  /// streams (that SIGBUS-crashed media_kit on iOS). Soft UI clip only.
+  Widget _buildCroppedLiveVideo(VideoController vc) {
+    return ClipRect(
+      child: Align(
+        alignment: Alignment.topCenter,
+        heightFactor: kFirmwareBottomCropKeepTop,
+        child: Video(
+          controller: vc,
+          fit: BoxFit.contain,
+          controls: NoVideoControls,
+        ),
       ),
     );
   }
@@ -1557,9 +1757,14 @@ class _DisconnectedPanel extends StatelessWidget {
 
   static const _wifiBody =
       'Connect to the UEMSI/HTV HD Express Camera System via the Wi‑Fi '
-      'settings on your mobile device. The network SSID is '
-      '"UEMSI/HTV HD Express Camera 2.4/5 Ghz_xxxxxxxx" '
-      '(xxxxxxxx=unique device ID). The password to connect is 12345678.\n\n'
+      'settings on your mobile device.\n\n'
+      'Network names (SSID):\n'
+      '• 2.4G: UEMSI/HTV HDCamera 2.4G_xxxxxxxx\n'
+      '• 5G: UEMSI/HTV HDCamera 5G_xxxxxxxx\n'
+      '(xxxxxxxx = unique device ID).\n\n'
+      'The password is 12345678.\n\n'
+      'The transmitter uses one band at a time (not both). Default is 5G; '
+      'switch 2.4G/5G in Device Settings (Footage) if needed.\n\n'
       'Then return to this app to view live video.';
 
   @override

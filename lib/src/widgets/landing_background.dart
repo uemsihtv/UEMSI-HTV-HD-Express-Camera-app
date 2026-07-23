@@ -38,6 +38,12 @@ class LandingBackground extends StatelessWidget {
       builder: (context, constraints) {
         final w = constraints.maxWidth;
         final h = constraints.maxHeight;
+        // Some landscape tablets (e.g. P90) draw system nav over the bottom of a
+        // full-bleed contain image and clip the logo. Fit sharp art in the safe area;
+        // keep the blurred fill edge-to-edge.
+        final pad = MediaQuery.paddingOf(context);
+        final sharpW = (w - pad.horizontal).clamp(0.0, w);
+        final sharpH = (h - pad.vertical).clamp(0.0, h);
 
         return Stack(
           fit: StackFit.expand,
@@ -70,17 +76,25 @@ class LandingBackground extends StatelessWidget {
             // Darken the blurred layer slightly for better text contrast and to
             // further reduce perceived “stretching”.
             const ColoredBox(color: Color(0x66000000)),
-            Center(
-              child: Image.asset(
-                assetPath,
-                fit: BoxFit.contain,
-                width: w,
-                height: h,
-                alignment: Alignment.center,
-                gaplessPlayback: true,
-                filterQuality: FilterQuality.high,
-                errorBuilder: (context, error, stackTrace) =>
-                    const SizedBox.shrink(),
+            Padding(
+              padding: EdgeInsets.only(
+                top: pad.top,
+                bottom: pad.bottom,
+                left: pad.left,
+                right: pad.right,
+              ),
+              child: Center(
+                child: Image.asset(
+                  assetPath,
+                  fit: BoxFit.contain,
+                  width: sharpW,
+                  height: sharpH,
+                  alignment: Alignment.center,
+                  gaplessPlayback: true,
+                  filterQuality: FilterQuality.high,
+                  errorBuilder: (context, error, stackTrace) =>
+                      const SizedBox.shrink(),
+                ),
               ),
             ),
           ],

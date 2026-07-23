@@ -1,6 +1,8 @@
 import 'package:ffmpeg_kit_flutter_new/ffmpeg_kit.dart';
 import 'package:ffmpeg_kit_flutter_new/return_code.dart';
 
+import 'firmware_frame_crop.dart';
+
 class FfmpegRecordResult {
   const FfmpegRecordResult({
     required this.sessionId,
@@ -23,6 +25,10 @@ class FfmpegRecorder {
     // After releasing the player connection on Android, TCP works well for the recorder.
     const rtspTransport = 'tcp';
 
+    // Must re-encode to apply crop (stream copy cannot filter). Crop bottom strip
+    // to hide firmware blue OSD line; keep top [kFirmwareBottomCropKeepTop].
+    final cropFilter = firmwareBottomCropFilter();
+
     final args = <String>[
       '-y',
       '-hide_banner',
@@ -40,8 +46,16 @@ class FfmpegRecorder {
       '-an',
       '-sn',
       '-dn',
-      '-c',
-      'copy',
+      '-vf',
+      cropFilter,
+      '-c:v',
+      'libx264',
+      '-preset',
+      'ultrafast',
+      '-crf',
+      '23',
+      '-pix_fmt',
+      'yuv420p',
       '-f',
       'mp4',
       '-movflags',
@@ -82,4 +96,3 @@ class FfmpegRecorder {
     }
   }
 }
-

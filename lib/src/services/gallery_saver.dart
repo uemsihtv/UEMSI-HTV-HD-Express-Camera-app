@@ -18,8 +18,10 @@ class GallerySaver {
       throw StateError('Photo library permission not granted');
     }
 
-    final filename = title.toLowerCase().endsWith('.jpg') ||
-            title.toLowerCase().endsWith('.jpeg')
+    final lower = title.toLowerCase();
+    final filename = lower.endsWith('.jpg') ||
+            lower.endsWith('.jpeg') ||
+            lower.endsWith('.png')
         ? title
         : '$title.jpg';
     await PhotoManager.editor.saveImage(

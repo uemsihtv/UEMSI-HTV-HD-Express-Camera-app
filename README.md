@@ -129,7 +129,9 @@ flutter build ios --release --no-codesign
 
 ## Transmitter Wi‑Fi
 
-Production SSIDs typically look like:
+Production SSIDs (32-character Wi‑Fi limit; `xxxxxxxx` = unique device ID):
 
-- `UEMSI/HTV HD Express Camera 2.4/5 Ghz_XXXXXXXX` (see in-app copy for exact pattern)
-- Default password (as documented in-app): `12345678`
+- **2.4G:** `UEMSI/HTV HDCamera 2.4G_xxxxxxxx` (32 chars)
+- **5G:** `UEMSI/HTV HDCamera 5G_xxxxxxxx` (30 chars)
+
+Default band is **5G**. The module cannot run both bands at once; switch 2.4G/5G in the transmitter Device Settings UI. Password (as documented in-app): `12345678`.

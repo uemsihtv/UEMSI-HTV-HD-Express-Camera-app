@@ -34,7 +34,31 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Connect to the camera transmitter over local Wi‑Fi to show live video.</string>
+	<string>Connect to the camera transmitter over local Wi‑Fi to show live video and open transmitter device settings.</string>
+	<!-- Required for the Local Network permission prompt (iOS 14+). -->
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_http._tcp</string>
+	</array>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<!-- Transmitter web UI is HTTP-only on 192.168.0.1 (device AP). -->
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+		<!-- WKWebView needs this for cleartext HTTP in web content. -->
+		<key>NSAllowsArbitraryLoadsInWebContent</key>
+		<true/>
+		<key>NSExceptionDomains</key>
+		<dict>
+			<key>192.168.0.1</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+				<key>NSIncludesSubdomains</key>
+				<true/>
+			</dict>
+		</dict>
+	</dict>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Save captured photos to your library.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
