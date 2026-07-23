@@ -1653,18 +1653,77 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
     );
   }
 
-  /// Stable live Video widget — do not recreate/resize it from width/height
-  /// streams (that SIGBUS-crashed media_kit on iOS). Soft UI clip only.
+  /// Stable [Video] widget (never rebuild/resize it from size streams — that
+  /// SIGBUS-crashed media_kit on iOS). Black strip covers the firmware blue OSD
+  /// along the bottom of the contained frame; [Positioned] stays under a nested
+  /// [Stack].
   Widget _buildCroppedLiveVideo(VideoController vc) {
-    return ClipRect(
-      child: Align(
-        alignment: Alignment.topCenter,
-        heightFactor: kFirmwareBottomCropKeepTop,
-        child: Video(
-          controller: vc,
-          fit: BoxFit.contain,
-          controls: NoVideoControls,
-        ),
+    final player = _player;
+    final video = Video(
+      controller: vc,
+      fit: BoxFit.contain,
+      controls: NoVideoControls,
+    );
+    if (player == null) {
+      return ColoredBox(color: Colors.black, child: video);
+    }
+
+    return ColoredBox(
+      color: Colors.black,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          video,
+          Positioned.fill(
+            child: IgnorePointer(
+              child: StreamBuilder<int?>(
+                stream: player.stream.width,
+                initialData: player.state.width,
+                builder: (context, widthSnap) {
+                  return StreamBuilder<int?>(
+                    stream: player.stream.height,
+                    initialData: player.state.height,
+                    builder: (context, heightSnap) {
+                      return LayoutBuilder(
+                        builder: (context, constraints) {
+                          final vw = (widthSnap.data ?? 0).toDouble();
+                          final vh = (heightSnap.data ?? 0).toDouble();
+                          final src = (vw > 0 && vh > 0)
+                              ? Size(vw, vh)
+                              : const Size(16, 9);
+                          final fitted = applyBoxFit(
+                            BoxFit.contain,
+                            src,
+                            constraints.biggest,
+                          );
+                          final dest = fitted.destination;
+                          final left =
+                              (constraints.maxWidth - dest.width) / 2;
+                          final top =
+                              (constraints.maxHeight - dest.height) / 2;
+                          final crop = dest.height *
+                              (1.0 - kFirmwareBottomCropKeepTop);
+                          if (crop <= 0) return const SizedBox.shrink();
+                          return Stack(
+                            children: [
+                              Positioned(
+                                left: left,
+                                top: top + dest.height - crop,
+                                width: dest.width,
+                                height: crop,
+                                child: const ColoredBox(color: Colors.black),
+                              ),
+                            ],
+                          );
+                        },
+                      );
+                    },
+                  );
+                },
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
