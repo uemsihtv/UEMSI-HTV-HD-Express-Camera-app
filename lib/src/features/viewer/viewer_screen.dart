@@ -284,6 +284,8 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
     );
   }
 
+  // Temporarily unused: Video settings button hidden while testing full buffer.
+  // ignore: unused_element
   Future<void> _openSettingsSheet() async {
     final prefs = _prefs;
     if (prefs == null || !mounted) return;
@@ -510,13 +512,12 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
   }
 
   PlayerConfiguration _playerConfigurationLowLatency() {
-    final tuningEnabled = _prefs?.lowLatencyTuningTcp ?? false;
-    return PlayerConfiguration(
+    // Experiment: use media_kit's default demuxer buffer (32 MB) instead of the
+    // reduced low-latency sizes. Video settings UI is hidden while we evaluate
+    // whether this improves live clarity.
+    return const PlayerConfiguration(
       protocolWhitelist: _protocolWhitelist,
-      // Low-latency buffer targets:
-      // - tuning ON: very small cache (lowest latency; may stutter on weak links)
-      // - tuning OFF: still low, but more forgiving
-      bufferSize: tuningEnabled ? 256 * 1024 : 1 * 1024 * 1024,
+      bufferSize: 32 * 1024 * 1024,
     );
   }
 
@@ -1618,14 +1619,7 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
                           label: const Text('Photo'),
                         ),
                       ),
-                      Align(
-                        alignment: Alignment.bottomCenter,
-                        child: _neonGearButton(
-                          onPressed: _openSettingsSheet,
-                          label: 'Video',
-                          tooltip: 'Video settings',
-                        ),
-                      ),
+                      // Video (low-latency) settings hidden while testing full buffer.
                       Align(
                         alignment: Alignment.bottomRight,
                         child: FilledButton.icon(
