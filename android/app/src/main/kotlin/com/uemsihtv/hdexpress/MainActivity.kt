@@ -1,4 +1,4 @@
-package com.example.uemsi_htv_hd_express_app
+package com.uemsihtv.hdexpress
 
 import android.content.Context
 import android.net.ConnectivityManager

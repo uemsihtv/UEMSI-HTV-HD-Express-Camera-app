@@ -2,7 +2,7 @@
 
 Flutter app to view an RTSP stream from a UEMSI/HTV HD Express Wi‑Fi transmitter (`rtsp://192.168.0.1:554/main`), with live playback, recording, snapshots, and gallery integration.
 
-**App version (from `pubspec.yaml`):** `0.1.1+2`
+**App version (from `pubspec.yaml`):** `1.0.0+1`
 
 ## License
 
