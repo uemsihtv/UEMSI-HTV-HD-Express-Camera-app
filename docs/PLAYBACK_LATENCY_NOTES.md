@@ -27,3 +27,6 @@ git checkout <that-commit> -- lib/src/features/viewer/viewer_screen.dart
 - iOS live: same as Android (**no TCP query** → UDP)
 - Demuxer buffer: **balanced ~4 MB** (between old 256 KB–1 MB and 32 MB)
 - Keep Video settings button hidden for now
+
+Applied on branch tip after `17cd334` (or search commit message for
+“UDP live on iOS”). Fallback remains the checkpoint above.

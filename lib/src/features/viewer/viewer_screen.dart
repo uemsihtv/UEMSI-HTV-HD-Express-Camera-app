@@ -19,7 +19,6 @@ import '../../services/gallery_saver.dart';
 import '../../services/ffmpeg_recorder.dart';
 import '../../services/system_gallery.dart';
 import '../../widgets/landing_background.dart';
-import 'device_settings_screen.dart';
 import 'viewer_prefs.dart';
 
 class ViewerScreen extends StatefulWidget {
@@ -505,19 +504,17 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
   }
 
   String _rtspUriLowLatency() {
-    // iOS: use RTSP/TCP for compatibility & stability.
-    // Android: use RTSP/UDP for lowest latency.
-    if (!Platform.isIOS) return _rtspHostPath;
-    return '$_rtspHostPath?rtsp_transport=tcp';
+    // Same path on iOS and Android: UDP RTSP (no rtsp_transport=tcp).
+    // TCP remains for FFmpeg recording only.
+    return _rtspHostPath;
   }
 
   PlayerConfiguration _playerConfigurationLowLatency() {
-    // Experiment: use media_kit's default demuxer buffer (32 MB) instead of the
-    // reduced low-latency sizes. Video settings UI is hidden while we evaluate
-    // whether this improves live clarity.
+    // Balanced demuxer buffer: smaller than the 32 MB clarity experiment,
+    // larger than the old 256 KB / 1 MB low-latency sizes. Target ~0.8 s.
     return const PlayerConfiguration(
       protocolWhitelist: _protocolWhitelist,
-      bufferSize: 32 * 1024 * 1024,
+      bufferSize: 4 * 1024 * 1024,
     );
   }
 
@@ -1131,9 +1128,9 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
 
   Future<void> _openDeviceSettings() async {
     if (!mounted) return;
-    // iOS: in-app WKWebView stays blank for the transmitter's HTTP UI.
-    // Manufacturer path is Safari. Pre-seed shared Keychain credentials so
-    // iPhone auto-fills Basic Auth like iPad (URL user:pass is often stripped).
+    // In-app WebView fails for the transmitter HTTP UI (iOS blank page;
+    // Android Chromium ERR_TOO_MANY_RETRIES with Basic Auth). Manufacturer
+    // path is a system browser — same on both platforms.
     if (Platform.isIOS) {
       try {
         await const MethodChannel('uemsi_device_web')
@@ -1143,25 +1140,22 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
         // Still open Safari; user can sign in manually if needed.
       }
       if (!mounted) return;
-
-      final uri = Uri.parse('http://192.168.0.1/');
-      final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
-      if (!mounted) return;
-      if (!ok) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Could not open device settings in Safari'),
-          ),
-        );
-      }
-      return;
     }
 
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => const DeviceSettingsScreen(),
-      ),
-    );
+    final uri = Uri.parse('http://192.168.0.1/');
+    final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!mounted) return;
+    if (!ok) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            Platform.isIOS
+                ? 'Could not open device settings in Safari'
+                : 'Could not open device settings in the browser',
+          ),
+        ),
+      );
+    }
   }
 
   static const _resetMeterUri =
