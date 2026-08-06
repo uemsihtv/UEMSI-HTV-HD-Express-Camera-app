@@ -3,7 +3,7 @@
 **App:** HD Express Camera  
 **Repo:** https://github.com/uemsihtv/UEMSI-HTV-HD-Express-Camera-app  
 **Team (iOS):** `42U77LXQML`  
-**Current version:** `1.0.0+1` in `pubspec.yaml`
+**Current version:** `1.0.0+2` in `pubspec.yaml`
 
 ---
 

@@ -59,6 +59,8 @@
 			</dict>
 		</dict>
 	</dict>
+	<key>NSCameraUsageDescription</key>
+	<string>This app does not use the iPhone or iPad camera. Camera API access may be referenced by video libraries used for live viewing from the HD Express transmitter.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Save captured photos to your library.</string>
 	<key>NSPhotoLibraryUsageDescription</key>

@@ -1,7 +1,7 @@
 name: uemsi_htv_hd_express_app
 description: RTSP viewer for UEMSI/HTV HD Express Camera transmitters.
 publish_to: "none"
-version: 1.0.0+1
+version: 1.0.0+2
 
 environment:
   sdk: ">=3.7.0 <4.0.0"
