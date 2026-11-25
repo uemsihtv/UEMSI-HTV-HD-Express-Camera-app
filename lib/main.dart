@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
 
 import 'src/app.dart';
@@ -11,6 +12,9 @@ void main() {
   runZonedGuarded(() {
     WidgetsFlutterBinding.ensureInitialized();
     MediaKit.ensureInitialized();
+    // Draw behind the Duo status bar so the picture reaches the screen edge.
+    // Buttons stay in SafeArea.
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
 
     FlutterError.onError = (details) {
       FlutterError.presentError(details);

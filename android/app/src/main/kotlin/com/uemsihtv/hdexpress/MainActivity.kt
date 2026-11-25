@@ -11,12 +11,59 @@ import android.os.Looper
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import java.util.concurrent.Executors
 
 class MainActivity : FlutterActivity() {
   private val channelName = "uemsi_wifi_joiner"
+  private val galleryChannelName = "uemsi_gallery_saver"
+  private val galleryIo = Executors.newSingleThreadExecutor()
 
   override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
     super.configureFlutterEngine(flutterEngine)
+
+    MethodChannel(flutterEngine.dartExecutor.binaryMessenger, galleryChannelName)
+      .setMethodCallHandler { call, result ->
+        when (call.method) {
+          "sdkInt" -> result.success(Build.VERSION.SDK_INT)
+          "saveImage" -> {
+            val bytes = call.argument<ByteArray>("bytes")
+            val filename = call.argument<String>("filename") ?: "capture.jpg"
+            if (bytes == null || bytes.isEmpty()) {
+              result.error("bad_args", "Missing image bytes", null)
+              return@setMethodCallHandler
+            }
+            galleryIo.execute {
+              try {
+                val uri = GalleryMediaStore.saveImage(this, bytes, filename)
+                Handler(Looper.getMainLooper()).post { result.success(uri) }
+              } catch (e: Exception) {
+                Handler(Looper.getMainLooper()).post {
+                  result.error("save_failed", e.message ?: "Save failed", null)
+                }
+              }
+            }
+          }
+          "saveVideo" -> {
+            val path = call.argument<String>("path")
+            val title = call.argument<String>("title") ?: ""
+            if (path.isNullOrBlank()) {
+              result.error("bad_args", "Missing video path", null)
+              return@setMethodCallHandler
+            }
+            galleryIo.execute {
+              try {
+                val uri = GalleryMediaStore.saveVideo(this, path, title)
+                Handler(Looper.getMainLooper()).post { result.success(uri) }
+              } catch (e: Exception) {
+                Handler(Looper.getMainLooper()).post {
+                  result.error("save_failed", e.message ?: "Save failed", null)
+                }
+              }
+            }
+          }
+          else -> result.notImplemented()
+        }
+      }
 
     MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName)
       .setMethodCallHandler { call, result ->

@@ -17,6 +17,7 @@ import '../../config/legal_urls.dart';
 import '../../services/firmware_frame_crop.dart';
 import '../../services/gallery_saver.dart';
 import '../../services/ffmpeg_recorder.dart';
+import '../../services/rtsp_control_relay.dart';
 import '../../services/system_gallery.dart';
 import '../../widgets/landing_background.dart';
 import 'viewer_prefs.dart';
@@ -81,6 +82,43 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
   bool _showLiveVideo = false;
 
   static const _neonGreen = Color(0xFF39FF14);
+
+  /// True once the current player has decoded video (width known).
+  bool _videoFlowing = false;
+
+  /// True while we are (re)connecting and video is not showing yet; drives the
+  /// "Reconnecting to live video" message. Cleared as soon as video arrives.
+  bool _reconnectingVideo = false;
+
+  Widget _loadingPanel(String message) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _neonLoadingSpinner(size: 88),
+          const SizedBox(height: 14),
+          DecoratedBox(
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.55),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+              child: Text(
+                message,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: _neonGreen,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.2,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   /// Set to `false` to restore the neon [CircularProgressIndicator] loaders.
   static const bool _usePooLoadingSpinner = true;
@@ -454,6 +492,7 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
         } catch (_) {}
       }
       await _disposePlayer(p);
+      await _relay.stop();
     }());
     super.dispose();
   }
@@ -473,16 +512,22 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
     await _stopRecording(saveToGallery: true);
     _playerGeneration++;
     final p = _player;
-    if (p == null && !_playerStarting) return;
+    if (p == null && !_playerStarting) {
+      await _relay.stop();
+      return;
+    }
     await _cancelPlayerSubsAsync();
     if (mounted) {
       setState(() {
         _player = null;
         _videoController = null;
         _playerStarting = false;
+        _videoFlowing = false;
+        _reconnectingVideo = false;
       });
     }
     await _disposePlayer(p);
+    await _relay.stop();
   }
 
   Future<void> _cancelPlayerSubsAsync() async {
@@ -503,9 +548,20 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
     } catch (_) {}
   }
 
+  /// iOS only: local relay for the RTSP control connection, so libavformat never
+  /// resolves 192.168.0.1 (iOS can hand back a NAT64 IPv6 address that routes
+  /// over cellular and hangs). Media is still UDP, direct from the transmitter.
+  late final RtspControlRelay _relay = RtspControlRelay(
+    upstreamHost: '192.168.0.1',
+    upstreamPort: 554,
+  );
+
   String _rtspUriLowLatency() {
     // Same path on iOS and Android: UDP RTSP (no rtsp_transport=tcp).
     // TCP remains for FFmpeg recording only.
+    if (Platform.isIOS && _relay.isRunning) {
+      return 'rtsp://127.0.0.1:${_relay.port}/main';
+    }
     return _rtspHostPath;
   }
 
@@ -516,6 +572,32 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
       protocolWhitelist: _protocolWhitelist,
       bufferSize: 4 * 1024 * 1024,
     );
+  }
+
+  /// Black-screen guard for a freshly opened player (mpv has no connect timeout
+  /// here): show the loading message after 3 s without video, and restart the
+  /// player after 8 s instead of staying black.
+  void _scheduleVideoWatchdog(Player player, int gen) {
+    Timer(const Duration(seconds: 3), () {
+      if (!mounted || gen != _playerGeneration || !identical(_player, player)) {
+        return;
+      }
+      if (_inForeground && player.state.width == null && !_reconnectingVideo) {
+        setState(() {
+          _videoFlowing = false;
+          _reconnectingVideo = true;
+        });
+      }
+    });
+    Timer(const Duration(seconds: 8), () {
+      if (!mounted || gen != _playerGeneration || !identical(_player, player)) {
+        return;
+      }
+      if (!_inForeground) return;
+      if (player.state.width == null) {
+        _scheduleRetry(reason: 'No video');
+      }
+    });
   }
 
   Future<String> _nextRecordingPath() async {
@@ -724,6 +806,16 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
     unawaited(_cancelPlayerSubsAsync());
     _playerSubs.add(player.stream.playing.listen((_) => _syncPlayerStatus()));
     _playerSubs.add(player.stream.buffering.listen((_) => _syncPlayerStatus()));
+    _playerSubs.add(player.stream.width.listen((v) {
+      if (v != null && v > 0 && mounted) {
+        if (!_videoFlowing || _reconnectingVideo) {
+          setState(() {
+            _videoFlowing = true;
+            _reconnectingVideo = false;
+          });
+        }
+      }
+    }));
     _playerSubs.add(player.stream.error.listen(_onPlayerStreamError));
   }
 
@@ -963,6 +1055,13 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
         return;
       }
 
+      if (Platform.isIOS) {
+        try {
+          await _relay.start();
+        } catch (_) {
+          // Fall back to the direct URL.
+        }
+      }
       final uri = _rtspUriLowLatency();
 
       final player = Player(configuration: _playerConfigurationLowLatency());
@@ -1039,7 +1138,9 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
         _player = player;
         _videoController = videoController;
         _status = 'Connecting…';
+        _videoFlowing = false;
       });
+      _scheduleVideoWatchdog(player, gen);
 
       if (previous != null) {
         await _disposePlayer(previous);
@@ -1058,7 +1159,11 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
     final attempt = _retryCount++;
     // Longer first delay avoids thrashing on brief RTSP hiccups (common on Android Wi‑Fi).
     final delayMs = min(8000, 2500 + 450 * pow(2, attempt).toInt());
-    setState(() => _status = 'Reconnecting… ($reason)');
+    setState(() {
+      _status = 'Reconnecting… ($reason)';
+      _videoFlowing = false;
+      _reconnectingVideo = true;
+    });
 
     _retryTimer = Timer(Duration(milliseconds: delayMs), () {
       unawaited(_retryPlayerAfterDelay());
@@ -1085,7 +1190,10 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
 
   Future<void> _openLiveVideo() async {
     if (!mounted) return;
-    setState(() => _showLiveVideo = true);
+    setState(() {
+      _showLiveVideo = true;
+      _reconnectingVideo = false;
+    });
     if (_prefs == null) return;
     // Don’t wait for the 2s health timer: probe now so Android/iOS start RTSP promptly.
     await _refreshReachabilityAndStartIfNeeded();
@@ -1110,6 +1218,8 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
         _player = null;
         _videoController = null;
         _status = 'Idle';
+        _videoFlowing = false;
+        _reconnectingVideo = false;
       });
     }
     _lastPlayerError = null;
@@ -1473,36 +1583,7 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
             child: (_player == null || vc == null)
                 ? (_showLiveVideo
                     ? IgnorePointer(
-                        child: Center(
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              _neonLoadingSpinner(size: 88),
-                              const SizedBox(height: 14),
-                              DecoratedBox(
-                                decoration: BoxDecoration(
-                                  color: Colors.black.withValues(alpha: 0.55),
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                                child: const Padding(
-                                  padding: EdgeInsets.symmetric(
-                                    vertical: 8,
-                                    horizontal: 12,
-                                  ),
-                                  child: Text(
-                                    'Loading Video...Please Wait',
-                                    textAlign: TextAlign.center,
-                                    style: TextStyle(
-                                      color: _neonGreen,
-                                      fontWeight: FontWeight.w700,
-                                      letterSpacing: 0.2,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
+                        child: _loadingPanel('Loading Video...Please Wait'),
                       )
                     : _DisconnectedPanel(
                         onOpenWifi: () {
@@ -1532,12 +1613,20 @@ class _ViewerScreenState extends State<ViewerScreen> with WidgetsBindingObserver
                           builder: (context, _) {
                             final ready =
                                 vc.notifier.value != null && vc.id.value != null;
-                            if (ready) return const SizedBox.shrink();
+                            if (ready || (_reconnectingVideo && !_videoFlowing)) {
+                              return const SizedBox.shrink();
+                            }
                             return IgnorePointer(
                               child: Center(child: _neonLoadingSpinner()),
                             );
                           },
                         ),
+                        // Black screen while (re)connecting: poo spinner + message,
+                        // hidden again as soon as video is flowing.
+                        if (_reconnectingVideo && !_videoFlowing)
+                          IgnorePointer(
+                            child: _loadingPanel('Loading Video...Please Wait'),
+                          ),
                       ],
                     ),
                   ),

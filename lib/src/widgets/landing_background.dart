@@ -2,15 +2,18 @@ import 'dart:ui';
 
 import 'package:flutter/material.dart';
 
-/// Full-screen background: one asset decoded once (shared [Image] cache), two paints.
+/// Edge-to-edge landing art that never crops the artwork.
 ///
-/// - Bottom: [BoxFit.cover] + blur → fills the screen; visible in letterboxed gutters.
-/// - Top: [BoxFit.contain] → sharp artwork with no cropping.
+/// - Bottom: a blurred [BoxFit.cover] copy fills the whole display, including
+///   behind the status bar, so no black bands show on the iPhone Duo's outer
+///   (portrait) or inner (squarer) screens.
+/// - Top: the sharp artwork uses [BoxFit.contain] inside the safe area, so the
+///   title and the UEMSI/HTV logo are always fully visible.
 class LandingBackground extends StatelessWidget {
   const LandingBackground({
     super.key,
     required this.assetPath,
-    this.blurSigma = 28,
+    this.blurSigma = 24,
   });
 
   final String assetPath;
@@ -34,72 +37,45 @@ class LandingBackground extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final w = constraints.maxWidth;
-        final h = constraints.maxHeight;
-        // Some landscape tablets (e.g. P90) draw system nav over the bottom of a
-        // full-bleed contain image and clip the logo. Fit sharp art in the safe area;
-        // keep the blurred fill edge-to-edge.
-        final pad = MediaQuery.paddingOf(context);
-        final sharpW = (w - pad.horizontal).clamp(0.0, w);
-        final sharpH = (h - pad.vertical).clamp(0.0, h);
+    final pad = MediaQuery.paddingOf(context);
 
-        return Stack(
-          fit: StackFit.expand,
-          children: [
-            const ColoredBox(color: Color(0xFF0B0B0B)),
-            ClipRect(
-              child: ImageFiltered(
-                imageFilter: ImageFilter.blur(
-                  sigmaX: blurSigma,
-                  sigmaY: blurSigma,
-                ),
-                child: Opacity(
-                  // Keep the fill, but make it read as ambient color/texture
-                  // instead of a “zoomed” version of the artwork.
-                  opacity: 0.35,
-                  child: Image.asset(
-                    assetPath,
-                    fit: BoxFit.cover,
-                    width: w,
-                    height: h,
-                    alignment: Alignment.center,
-                    gaplessPlayback: true,
-                    filterQuality: FilterQuality.medium,
-                    errorBuilder: (context, error, stackTrace) =>
-                        _error(assetPath),
-                  ),
-                ),
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        const ColoredBox(color: Color(0xFF0B0B0B)),
+        ClipRect(
+          child: ImageFiltered(
+            imageFilter: ImageFilter.blur(
+              sigmaX: blurSigma,
+              sigmaY: blurSigma,
+              tileMode: TileMode.mirror,
+            ),
+            child: Opacity(
+              opacity: 0.9,
+              child: Image.asset(
+                assetPath,
+                fit: BoxFit.cover,
+                alignment: Alignment.center,
+                gaplessPlayback: true,
+                filterQuality: FilterQuality.medium,
+                errorBuilder: (context, error, stackTrace) => _error(assetPath),
               ),
             ),
-            // Darken the blurred layer slightly for better text contrast and to
-            // further reduce perceived “stretching”.
-            const ColoredBox(color: Color(0x66000000)),
-            Padding(
-              padding: EdgeInsets.only(
-                top: pad.top,
-                bottom: pad.bottom,
-                left: pad.left,
-                right: pad.right,
-              ),
-              child: Center(
-                child: Image.asset(
-                  assetPath,
-                  fit: BoxFit.contain,
-                  width: sharpW,
-                  height: sharpH,
-                  alignment: Alignment.center,
-                  gaplessPlayback: true,
-                  filterQuality: FilterQuality.high,
-                  errorBuilder: (context, error, stackTrace) =>
-                      const SizedBox.shrink(),
-                ),
-              ),
-            ),
-          ],
-        );
-      },
+          ),
+        ),
+        Padding(
+          padding: EdgeInsets.fromLTRB(pad.left, pad.top, pad.right, pad.bottom),
+          child: Image.asset(
+            assetPath,
+            fit: BoxFit.contain,
+            alignment: Alignment.center,
+            gaplessPlayback: true,
+            filterQuality: FilterQuality.high,
+            errorBuilder: (context, error, stackTrace) =>
+                const SizedBox.shrink(),
+          ),
+        ),
+      ],
     );
   }
 }

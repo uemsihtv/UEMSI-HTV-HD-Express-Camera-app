@@ -1,13 +1,13 @@
 # UIScene migration checklist (iOS)
 
-**Status:** Hold off until Flutter + iOS scene lifecycle is proven stable for this app.  
-**Current runtime path:** classic `AppDelegate` + explicit `FlutterEngine` + `UIWindow` (no scene manifest).  
-**Reference (not compiled):** [`ios/Runner/SceneDelegate.swift`](../ios/Runner/SceneDelegate.swift)
+**Status:** Migrated. The window is owned by `SceneDelegate` and attached to the connecting `UIWindowScene`.  
+**Current runtime path:** `AppDelegate` (process only) + explicit `FlutterEngine` + `UIWindow(windowScene:)` + `UIApplicationSceneManifest` (multiple scenes off).  
+**Compiled:** [`ios/Runner/SceneDelegate.swift`](../ios/Runner/SceneDelegate.swift)
 
-## Why we are not on UIScene today
+## Why the engine stays explicit
 
-- An earlier AppDelegate + explicit-engine setup was adopted to avoid **UIScene + implicit Flutter engine races** (notably around iOS 26 / `FlutterViewController` startup).
-- `SceneDelegate.swift` is kept in the Xcode project for a future flip, but it is **not** in the Runner **Compile Sources** build phase, and `Info.plist` has **no** `UIApplicationSceneManifest`.
+- An implicit `FlutterViewController` crashed in `viewDidLoad` on iOS 26 (ProMotion / touch-rate vsync client). The scene manifest therefore has **no** `UISceneStoryboardFile`.
+- `UIScreen.main` is not used. On iPhone Duo that screen is ambiguous, and a window sized from it does not follow a fold.
 
 Official Flutter guide (check for updates when migrating):  
 https://flutter.dev/to/uiscene-migration
@@ -27,41 +27,42 @@ https://flutter.dev/to/uiscene-migration
 
 ### 1. Info.plist — enable scenes
 
-- [ ] Add `UIApplicationSceneManifest` with:
+- [x] Add `UIApplicationSceneManifest` with:
   - Application supports multiple scenes = `NO` (single-window camera app).
   - Scene configuration name (e.g. `Default Configuration`).
   - Delegate class name = `$(PRODUCT_MODULE_NAME).SceneDelegate` (or `SceneDelegate` as appropriate).
-- [ ] Keep existing keys (`NSLocalNetworkUsageDescription`, ATS local networking, photo usage, etc.).
+- [x] Keep existing keys (`NSLocalNetworkUsageDescription`, ATS local networking, photo usage, etc.).
 
 ### 2. Compile `SceneDelegate.swift`
 
-- [ ] Xcode → Runner target → **Build Phases** → **Compile Sources** → add `SceneDelegate.swift`.
-- [ ] Confirm the file still matches the intended pattern: **explicit** `FlutterEngine`, then `FlutterViewController(engine:)`, then `GeneratedPluginRegistrant.register(with:)`.
+- [x] Xcode → Runner target → **Build Phases** → **Compile Sources** → add `SceneDelegate.swift`.
+- [x] Confirm the file still matches the intended pattern: **explicit** `FlutterEngine`, `GeneratedPluginRegistrant.register(with:)`, then `FlutterViewController(engine:)`.
 
 ### 3. Reconcile `AppDelegate` (critical)
 
 Goal: **one** engine, **one** window owner, **no duplicate** method channels.
 
-- [ ] Stop creating `UIWindow` / `FlutterViewController` / running a second engine in `application(_:didFinishLaunchingWithOptions:)` once scenes own the UI.
-- [ ] Move or keep plugin registration in **one** place only (prefer the Flutter-recommended scene/AppDelegate split for your Flutter version).
-- [ ] Ensure channels are registered once:
+- [x] Stop creating `UIWindow` / `FlutterViewController` / running a second engine in `application(_:didFinishLaunchingWithOptions:)` once scenes own the UI.
+- [x] Move or keep plugin registration in **one** place only (prefer the Flutter-recommended scene/AppDelegate split for your Flutter version).
+- [x] Ensure channels are registered once:
   - `uemsi_device_info`
-  - `uemsi_wifi_joiner` (currently deferred one main-queue turn in both files)
-- [ ] Decide where `@main` / `UIApplicationDelegate` lifecycle stays (AppDelegate remains the process delegate; SceneDelegate owns the window scene).
+  - `uemsi_device_web`
+  - (`uemsi_wifi_joiner` was removed on iOS; it was never called from the UI)
+- [x] Decide where `@main` / `UIApplicationDelegate` lifecycle stays (AppDelegate remains the process delegate; SceneDelegate owns the window scene).
 
 ### 4. Align `SceneDelegate` with current `AppDelegate` behavior
 
 Match the production AppDelegate behaviors that SceneDelegate already sketches:
 
-- [ ] Explicit engine: `FlutterEngine(name: "main_engine")` → `run()` → register plugins → attach `FlutterViewController`.
-- [ ] Create `UIWindow(windowScene:)` (not `UIScreen.main.bounds` alone).
-- [ ] Install device-info channel synchronously; defer Wi‑Fi join channel one main-queue turn (same as AppDelegate).
-- [ ] Do **not** use implicit `FlutterViewController()` without an engine (that was part of the crash/race surface).
+- [x] Explicit engine: `FlutterEngine(name: "main_engine")` → `run()` → register plugins → attach `FlutterViewController`.
+- [x] Create `UIWindow(windowScene:)` (not `UIScreen.main.bounds` alone).
+- [x] Install device-info and device-web channels synchronously; defer Wi‑Fi join channel one main-queue turn.
+- [x] Do **not** use implicit `FlutterViewController()` without an engine (that was part of the crash/race surface).
 
 ### 5. Clean up
 
-- [ ] Remove dead `AppDelegate.window` setup if unused after migration.
-- [ ] Update the header comments in `SceneDelegate.swift` / `AppDelegate.swift` so they no longer say “reference only.”
+- [x] Remove dead `AppDelegate.window` setup if unused after migration.
+- [x] Update the header comments in `SceneDelegate.swift` / `AppDelegate.swift` so they no longer say “reference only.”
 - [ ] `cd ios && pod install` after any embedding/plugin changes.
 - [ ] Build from **`ios/Runner.xcworkspace`** (not `.xcodeproj`).
 
@@ -82,6 +83,12 @@ Test on a **physical** iPhone and iPad (simulator is not enough for RTSP / local
 - [ ] About dialog + legal links.
 - [ ] Repeat after device reboot once.
 
+On iPhone Duo, also:
+
+- [ ] Cold launch folded (outer display) and unfolded (inner display). Controls stay clear of the side status bar.
+- [ ] Fold and unfold while live video is playing. The picture resizes and the stream keeps playing.
+- [ ] Half-folded pose. Back, Photo, and Record stay off the crease.
+
 ---
 
 ## Rollback
@@ -97,10 +104,4 @@ If launch is unstable:
 
 ## Decision rule
 
-Migrate when **all** are true:
-
-1. Flutter’s UIScene docs match your Flutter channel/version.
-2. A dedicated branch passes the regression list above on real hardware.
-3. You are ready to treat launch crashes as a release blocker for that branch.
-
-Until then, keep the current AppDelegate path and treat console UIScene warnings as informational.
+Migrated so the window follows the active iPhone Duo display. If launch is unstable on device, use the rollback section above. A build with the iOS 27.1 SDK or later is what extends the app to the screen edge; the iOS 27 SDK still leaves a margin beside the status bar.
